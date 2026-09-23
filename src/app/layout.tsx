@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Geist_Mono } from "next/font/google";
 import NavLoginButton from "@/components/NavLoginButton";
+import SettingsModal from "@/components/SettingsModal";
 import "./globals.css";
 
 const geistMono = Geist_Mono({
@@ -43,7 +45,7 @@ export default function RootLayout({
         {/* Navbar */}
         <nav className="relative z-50 glass border-b border-[oklch(0.30_0.05_290_/_0.25)] sticky top-0">
           <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
-            <a href="/" className="flex items-center gap-2.5 group">
+            <Link href="/" className="flex items-center gap-2.5 group">
               {/* Logo icon */}
               <div className="w-8 h-8 rounded-lg flex items-center justify-center animate-pulse-glow"
                 style={{ background: "linear-gradient(135deg, oklch(0.65 0.22 290), oklch(0.55 0.22 230))" }}>
@@ -55,13 +57,14 @@ export default function RootLayout({
                 </svg>
               </div>
               <span className="text-xl font-bold gradient-text">PRD-Genius</span>
-            </a>
+            </Link>
 
             <div className="flex items-center gap-3">
               <span className="hidden sm:flex items-center gap-1.5 text-xs text-[oklch(0.55_0.04_265)] font-medium">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
                 AI Ready
               </span>
+              <SettingsModal />
               <NavLoginButton />
             </div>
           </div>
@@ -73,7 +76,7 @@ export default function RootLayout({
           <p>
             © 2026{" "}
             <span className="gradient-text font-semibold">PRD-Genius</span>
-            {" · "}Powered by GPT-4o · All rights reserved.
+            {" · "}Multi-provider AI (OpenAI · OpenRouter · ModelRouter) · All rights reserved.
           </p>
         </footer>
       </body>

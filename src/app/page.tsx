@@ -2,6 +2,16 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import {
+  describeModel,
+  getProvider,
+} from "@/lib/ai-providers";
+import { toAiConfigPayload, useAiSettings } from "@/lib/useAiSettings";
+import {
+  buildDefaultRoadmap,
+  buildDefaultWiki,
+} from "@/lib/workspace-generator";
+
 
 /* ─── Types ─────────────────────────────────────────────── */
 type Phase = "idle" | "clarifying" | "answering" | "generating" | "done" | "error";
@@ -13,14 +23,17 @@ function cn(...classes: (string | undefined | false | null)[]) {
 
 /* ─── Feature badges ─────────────────────────────────────── */
 const FEATURES = [
-  { icon: "📋", label: "PRD Lengkap" },
-  { icon: "🤖", label: "Master Dev Prompt" },
-  { icon: "⚡", label: "Powered by GPT-4o" },
-  { icon: "🎯", label: "5 Clarifying Questions" },
+  { icon: "📚", label: "Wiki Baseline Codebase" },
+  { icon: "📖", label: "Roadmap Task AI Coding" },
+  { icon: "💬", label: "Chat Codebase" },
+  { icon: "📋", label: "PRD & Master Prompt" },
 ];
+
+
 
 export default function Home() {
   const router = useRouter();
+  const { settings } = useAiSettings();
 
   const [idea, setIdea] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
@@ -30,11 +43,24 @@ export default function Home() {
   const [currentAnswer, setCurrentAnswer] = useState("");
   const [progressLabel, setProgressLabel] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [errorIsConfig, setErrorIsConfig] = useState(false);
   const answerRef = useRef<HTMLTextAreaElement>(null);
+
+  /* Provider/model yang sedang aktif (dibaca dari localStorage) */
+  const activeProvider = getProvider(settings.provider);
+  const activeModelLabel = describeModel(
+    settings.provider,
+    settings.model,
+    settings.baseUrl
+  );
+  const hasApiKey = Boolean(settings.apiKey.trim());
 
   /* Focus textarea when question changes */
   useEffect(() => {
     if (phase === "answering") {
+      // Transisi pertanyaan baru memang perlu mereset input & memindah fokus,
+      // ini sinkronisasi DOM nyata (bukan turunan state) sehingga dikecualikan.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCurrentAnswer("");
       answerRef.current?.focus();
     }
@@ -45,18 +71,20 @@ export default function Home() {
     if (!idea.trim()) return;
     setPhase("clarifying");
     setErrorMsg("");
+    setErrorIsConfig(false);
     try {
       const res = await fetch("/api/clarify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea }),
+        body: JSON.stringify({
+          idea,
+          ...toAiConfigPayload(settings),
+        }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
-        const msg = data.error || `Server error (${res.status})`;
-        setErrorMsg(msg.includes("API key") || msg.includes("apiKey")
-          ? "OpenAI API key belum diset. Isi OPENAI_API_KEY di file .env.local lalu restart server."
-          : msg);
+        setErrorMsg(data.error || `Server error (${res.status})`);
+        setErrorIsConfig(Boolean(data.isConfigError));
         setPhase("error");
         return;
       }
@@ -88,6 +116,7 @@ export default function Home() {
   const handleGenerate = async (finalAnswers: Record<string, string>) => {
     setPhase("generating");
     setErrorMsg("");
+    setErrorIsConfig(false);
 
     const labels = [
       "Menganalisis ide Anda...",
@@ -108,26 +137,34 @@ export default function Home() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, answers: finalAnswers }),
+        body: JSON.stringify({
+          idea,
+          answers: finalAnswers,
+          ...toAiConfigPayload(settings),
+        }),
       });
       const data = await res.json();
       clearInterval(interval);
 
       if (!res.ok || data.error) {
-        const msg = data.error || `Server error (${res.status})`;
-        setErrorMsg(msg.includes("API key") || msg.includes("apiKey")
-          ? "OpenAI API key belum diset. Isi OPENAI_API_KEY di file .env.local lalu restart server."
-          : msg);
+        setErrorMsg(data.error || `Server error (${res.status})`);
+        setErrorIsConfig(Boolean(data.isConfigError));
         setPhase("error");
         return;
       }
 
       /* Store result in sessionStorage so result page can read it */
       sessionStorage.setItem("prd_result", JSON.stringify({
+        projectName: data.projectName,
+        projectSlug: data.projectSlug,
         prdMarkdown: data.prdMarkdown,
         masterPrompt: data.masterPrompt,
+        wiki: data.wiki,
+        roadmap: data.roadmap,
         idea,
         generatedAt: new Date().toISOString(),
+        provider: data.meta?.provider ?? activeProvider.label,
+        model: data.meta?.model ?? settings.model,
       }));
 
       setPhase("done");
@@ -140,31 +177,73 @@ export default function Home() {
     }
   };
 
+  const handleLoadSampleWorkspace = () => {
+    const sampleIdea =
+      "Platform terpadu untuk perencanaan dan manajemen pengembangan produk berbasis AI. Memfasilitasi alur kerja mulai dari onboarding pengguna, penyusunan spesifikasi (PRD) dan roadmap melalui wizard terpandu, visualisasi workspace (task board, wiki, chat codebase), hingga layanan monetisasi seperti paket langganan, add-on credit, voucher, alur pembayaran manual, dan pemesanan sesi coaching.";
+    const sampleName = "ngodingpakeai";
+    const sampleSlug = "rafiulm/ngodingpakeai";
+    const defaultWiki = buildDefaultWiki(sampleName, sampleSlug, sampleIdea);
+    const defaultRoadmap = buildDefaultRoadmap(sampleName, sampleIdea);
+
+    sessionStorage.setItem(
+      "prd_result",
+      JSON.stringify({
+        projectName: sampleName,
+        projectSlug: sampleSlug,
+        idea: sampleIdea,
+        generatedAt: new Date().toISOString(),
+        provider: "AI Architect",
+        model: "gpt-4o",
+        prdMarkdown: `# PRD: ngodingpakeai — Platform AI Coding & Workspace Terpadu
+
+## 1. Executive Summary
+Repository **rafiulm/ngodingpakeai** merupakan platform terpadu untuk perencanaan dan manajemen pengembangan produk berbasis AI. Sistem ini memfasilitasi alur kerja mulai dari onboarding pengguna, penyusunan spesifikasi (PRD) dan roadmap melalui wizard terpandu, visualisasi workspace (task board, wiki, chat codebase), hingga layanan monetisasi.
+
+## 2. Core Features
+- **Wizard PRD & Spec Generator:** Mengubah ide mentah menjadi rencana produk dan spesifikasi modular.
+- **Baseline Codebase & Documentation (Wiki):** Menyusun arsitektur sistem, peta aplikasi, antarmuka, dan skema database.
+- **Roadmap & Task AI Coding:** Daftar tugas terstruktur dengan prompt presisi yang siap disalin ke Cursor, Claude Code, Windsurf, dan Copilot.
+- **Chat Codebase:** Asisten AI cerdas untuk tanya jawab arsitektur dan debugging kode.`,
+        masterPrompt: `Sebagai Lead AI Architect, bangun repository ngodingpakeai dengan Next.js 15 App Router, TypeScript, Tailwind CSS, dan Supabase Database. Ikuti Roadmap Task yang telah disusun secara terstruktur.`,
+        wiki: defaultWiki,
+        roadmap: defaultRoadmap,
+      })
+    );
+
+    router.push("/result");
+  };
+
   /* ─── Render: ERROR ──────────────────────────────────── */
   if (phase === "error") {
-    const isApiKeyError = errorMsg.includes("API key") || errorMsg.includes("OPENAI_API_KEY");
     return (
       <div className="flex min-h-[80vh] items-center justify-center px-4">
-        <div className="glass-card rounded-3xl p-10 text-center max-w-md w-full animate-scale-in">
+        <div className="glass-card rounded-3xl p-10 text-center max-w-lg w-full animate-scale-in">
           {/* Error icon */}
           <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6"
             style={{ background: "oklch(0.65 0.22 25 / 0.15)", border: "1px solid oklch(0.65 0.22 25 / 0.3)" }}>
-            <span className="text-3xl">{isApiKeyError ? "🔑" : "⚠️"}</span>
+            <span className="text-3xl">{errorIsConfig ? "🔑" : "⚠️"}</span>
           </div>
 
           <h2 className="text-xl font-bold mb-3" style={{ color: "oklch(0.85 0.12 25)" }}>
-            {isApiKeyError ? "API Key Diperlukan" : "Terjadi Kesalahan"}
+            {errorIsConfig ? "Koneksi Model Bermasalah" : "Terjadi Kesalahan"}
           </h2>
 
-          <p className="text-sm leading-relaxed mb-6" style={{ color: "oklch(0.60 0.04 265)" }}>
+          <p className="text-sm leading-relaxed mb-6 break-words text-left" style={{ color: "oklch(0.60 0.04 265)" }}>
             {errorMsg}
           </p>
 
-          {isApiKeyError && (
+          {errorIsConfig && (
             <div className="text-left rounded-xl p-4 mb-6 text-xs font-mono"
               style={{ background: "oklch(0.10 0.02 265)", border: "1px solid oklch(0.22 0.03 265)", color: "oklch(0.70 0.10 290)" }}>
-              <p className="text-[oklch(0.50_0.04_265)] mb-2">📄 .env.local</p>
-              <p>OPENAI_API_KEY=<span style={{ color: "oklch(0.65 0.18 170)" }}>sk-proj-...</span></p>
+              <p className="text-[oklch(0.50_0.04_265)] mb-2">
+                {activeProvider.icon} {activeProvider.label} · {settings.model}
+              </p>
+              <p className="break-all">
+                {activeProvider.env.apiKeyVar}=
+                <span style={{ color: "oklch(0.65 0.18 170)" }}>
+                  {activeProvider.apiKeyPlaceholder}
+                </span>
+              </p>
             </div>
           )}
 
@@ -199,6 +278,7 @@ export default function Home() {
       </div>
     );
   }
+
 
   /* ─── Render: GENERATING ──────────────────────────────── */
   if (phase === "generating" || phase === "done") {
@@ -241,7 +321,6 @@ export default function Home() {
 
   /* ─── Render: ANSWERING ───────────────────────────────── */
   if (phase === "answering") {
-    const progress = ((currentQ) / questions.length) * 100;
     const progressDone = ((currentQ + 1) / questions.length) * 100;
 
     return (
@@ -444,6 +523,29 @@ export default function Home() {
             </span>
           ))}
         </div>
+
+        {/* Status provider aktif */}
+        <div className="flex justify-center mt-4">
+          <span
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-mono"
+            style={{
+              background: "oklch(0.12 0.03 265)",
+              border: `1px solid ${
+                hasApiKey ? "oklch(0.45 0.18 170 / 0.45)" : "oklch(0.70 0.16 75 / 0.40)"
+              }`,
+              color: hasApiKey ? "oklch(0.70 0.14 170)" : "oklch(0.75 0.12 75)",
+            }}
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full"
+              style={{
+                background: hasApiKey ? "oklch(0.65 0.18 170)" : "oklch(0.70 0.16 75)",
+              }}
+            />
+            {activeProvider.icon} {activeProvider.label} · {activeModelLabel}
+            {!hasApiKey && " · pakai key server"}
+          </span>
+        </div>
       </div>
 
       {/* Main input card */}
@@ -517,6 +619,20 @@ export default function Home() {
           }}
         >
           ✨ Mulai Generate PRD
+        </button>
+
+        <div className="relative flex py-4 items-center">
+          <div className="flex-grow border-t border-[oklch(0.20_0.025_265)]"></div>
+          <span className="shrink mx-4 text-xs text-[oklch(0.45_0.03_265)]">atau</span>
+          <div className="flex-grow border-t border-[oklch(0.20_0.025_265)]"></div>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleLoadSampleWorkspace}
+          className="w-full py-3.5 rounded-xl text-xs font-semibold transition-all duration-200 bg-[#16202c] hover:bg-[#1e2b3c] text-[oklch(0.85_0.10_45)] hover:text-white border border-[oklch(0.30_0.04_265)] hover:border-[oklch(0.45_0.05_265)] flex items-center justify-center gap-2 cursor-pointer shadow-md"
+        >
+          <span>🔥 Buka Contoh Baseline Workspace & Wiki (seperti ngodingpakeai)</span>
         </button>
       </div>
 

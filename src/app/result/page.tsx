@@ -4,21 +4,29 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useIsClient } from "@/lib/useAiSettings";
+import {
+  buildDefaultRoadmap,
+  buildDefaultWiki,
+  extractProjectName,
+  slugify,
+  type WorkspaceData,
+} from "@/lib/workspace-generator";
+import WikiView from "@/components/workspace/WikiView";
+import RoadmapView from "@/components/workspace/RoadmapView";
+import ChatCodebaseView from "@/components/workspace/ChatCodebaseView";
 
-/* ─── Types ─────────────────────────────────────────────── */
-interface PRDResult {
-  prdMarkdown: string;
-  masterPrompt: string;
-  idea: string;
-  generatedAt: string;
-}
 
 /* ─── Tab config ─────────────────────────────────────────── */
-const TABS = [
-  { id: "prd", label: "📋 PRD Document", icon: "📋" },
-  { id: "prompt", label: "🤖 Master Dev Prompt", icon: "🤖" },
+const WORKSPACE_TABS = [
+  { id: "wiki", label: "📚 Wiki Codebase", icon: "📚", highlight: true },
+  { id: "roadmap", label: "📖 Task Roadmap", icon: "📖", highlight: true },
+  { id: "chat", label: "💬 Chat Codebase", icon: "💬" },
+  { id: "prd", label: "📋 Dokumen PRD", icon: "📋" },
+  { id: "prompt", label: "🤖 Master Prompt", icon: "🤖" },
 ] as const;
-type TabId = typeof TABS[number]["id"];
+
+type TabId = typeof WORKSPACE_TABS[number]["id"];
 
 /* ─── Copy button ────────────────────────────────────────── */
 function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
@@ -33,7 +41,7 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
   return (
     <button
       onClick={handleCopy}
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200"
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 cursor-pointer"
       style={{
         background: copied
           ? "oklch(0.45 0.18 170 / 0.2)"
@@ -62,29 +70,61 @@ function downloadFile(content: string, filename: string, mime: string) {
   URL.revokeObjectURL(url);
 }
 
-/* ─── Main component ─────────────────────────────────────── */
 export default function ResultPage() {
   const router = useRouter();
-  const [result, setResult] = useState<PRDResult | null>(null);
-  const [activeTab, setActiveTab] = useState<TabId>("prd");
-  const [mounted, setMounted] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabId>("wiki");
+  const mounted = useIsClient();
 
-  /* Load from sessionStorage on mount */
-  useEffect(() => {
-    const stored = sessionStorage.getItem("prd_result");
-    if (stored) {
-      try {
-        setResult(JSON.parse(stored));
-      } catch {
-        router.push("/");
-      }
-    } else {
-      router.push("/");
+  const [workspace] = useState<WorkspaceData | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const stored = sessionStorage.getItem("prd_result");
+      if (!stored) return null;
+      const parsed = JSON.parse(stored);
+
+      const prdMarkdown = parsed.prdMarkdown || "";
+      const masterPrompt = parsed.masterPrompt || "";
+      const idea = parsed.idea || "";
+      const projectName =
+        parsed.projectName || extractProjectName(idea, prdMarkdown);
+      const cleanSlug = slugify(projectName);
+      const projectSlug = parsed.projectSlug || `rafiulm/${cleanSlug}`;
+
+      const wiki =
+        parsed.wiki && Array.isArray(parsed.wiki) && parsed.wiki.length > 0
+          ? parsed.wiki
+          : buildDefaultWiki(projectName, projectSlug, idea, prdMarkdown);
+
+      const roadmap =
+        parsed.roadmap && Array.isArray(parsed.roadmap) && parsed.roadmap.length > 0
+          ? parsed.roadmap
+          : buildDefaultRoadmap(projectName, idea, prdMarkdown);
+
+      return {
+        projectName,
+        projectSlug,
+        idea,
+        generatedAt: parsed.generatedAt || new Date().toISOString(),
+        provider: parsed.provider,
+        model: parsed.model,
+        prdMarkdown,
+        masterPrompt,
+        wiki,
+        roadmap,
+      };
+    } catch {
+      return null;
     }
-    setMounted(true);
-  }, [router]);
+  });
 
-  if (!mounted || !result) {
+  const hasResult = workspace !== null;
+
+  /* Belum ada data setelah hydrate → kembalikan ke halaman utama */
+  useEffect(() => {
+    if (mounted && !hasResult) router.push("/");
+  }, [mounted, hasResult, router]);
+
+  if (!mounted || !workspace) {
     return (
       <div className="flex min-h-[80vh] items-center justify-center">
         <div className="text-center animate-fade-in">
@@ -93,141 +133,164 @@ export default function ResultPage() {
             <div className="typing-dot" />
             <div className="typing-dot" />
           </div>
-          <p className="text-sm text-[oklch(0.50_0.04_265)]">Memuat hasil...</p>
+          <p className="text-sm text-[oklch(0.50_0.04_265)]">Memuat workspace...</p>
         </div>
       </div>
     );
   }
 
-  const activeContent = activeTab === "prd" ? result.prdMarkdown : result.masterPrompt;
-  const filename = activeTab === "prd" ? "PRD-Genius-PRD.md" : "PRD-Genius-Master-Prompt.md";
-  const formattedDate = new Date(result.generatedAt).toLocaleString("id-ID", {
+  const formattedDate = new Date(workspace.generatedAt).toLocaleString("id-ID", {
     dateStyle: "long",
     timeStyle: "short",
   });
 
-  return (
-    <div className="min-h-[85vh] px-4 py-10 max-w-5xl mx-auto animate-fade-in-up">
 
+  return (
+    <div className="min-h-[85vh] px-4 py-8 max-w-6xl mx-auto animate-fade-in-up">
       {/* ─── Header ─────────────────────────────────────── */}
-      <div className="mb-8">
-        <button
-          onClick={() => router.push("/")}
-          className="inline-flex items-center gap-1.5 text-sm text-[oklch(0.55_0.04_265)] hover:text-[oklch(0.75_0.08_265)] transition-colors mb-6 group"
-        >
-          <span className="group-hover:-translate-x-1 transition-transform">←</span>
-          Buat PRD Baru
-        </button>
+      <div className="mb-6">
+        <div className="flex items-center justify-between gap-4 mb-4">
+          <button
+            onClick={() => router.push("/")}
+            className="inline-flex items-center gap-1.5 text-xs text-[oklch(0.55_0.04_265)] hover:text-white transition-colors group cursor-pointer"
+          >
+            <span className="group-hover:-translate-x-1 transition-transform">←</span>
+            Buat PRD Baru
+          </button>
+
+          {(workspace.provider || workspace.model) && (
+            <span className="text-[11px] font-mono text-[oklch(0.60_0.06_290)] bg-[#121822] px-2.5 py-1 rounded-full border border-[oklch(0.22_0.03_265)]">
+              🤖 {workspace.provider ?? "AI"}
+              {workspace.model ? ` · ${workspace.model}` : ""}
+            </span>
+          )}
+        </div>
 
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-black gradient-text mb-2">
-              PRD Siap! 🎉
+            <h1 className="text-2xl sm:text-3xl font-black text-[oklch(0.95_0.01_265)] flex items-center gap-2">
+              <span className="gradient-text">{workspace.projectName}</span>
+              <span className="text-xs px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/40 font-mono">
+                Baseline #1 Ready
+              </span>
             </h1>
-            <p className="text-sm text-[oklch(0.45_0.04_265)] line-clamp-2 max-w-xl">
-              📌 {result.idea.slice(0, 120)}{result.idea.length > 120 ? "..." : ""}
+            <p className="text-xs text-[oklch(0.50_0.04_265)] line-clamp-2 max-w-2xl mt-1">
+              📌 {workspace.idea}
             </p>
-            <p className="text-xs text-[oklch(0.38_0.04_265)] mt-1">
-              Generated {formattedDate}
+            <p className="text-[11px] text-[oklch(0.40_0.04_265)] mt-1">
+              Dibuat pada {formattedDate}
             </p>
           </div>
 
-          {/* Action buttons */}
+          {/* Quick Action buttons */}
           <div className="flex items-center gap-2 shrink-0">
-            <CopyButton text={activeContent} label="Copy Tab Aktif" />
+            <CopyButton
+              text={
+                activeTab === "prd"
+                  ? workspace.prdMarkdown
+                  : activeTab === "prompt"
+                  ? workspace.masterPrompt
+                  : JSON.stringify(workspace, null, 2)
+              }
+              label="Copy Aktif"
+            />
             <button
-              onClick={() => downloadFile(activeContent, filename, "text/markdown")}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200"
-              style={{
-                background: "oklch(0.16 0.03 265)",
-                color: "oklch(0.65 0.04 265)",
-                border: "1px solid oklch(0.22 0.03 265)",
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background = "oklch(0.20 0.04 265)";
-                (e.currentTarget as HTMLButtonElement).style.color = "oklch(0.80 0.04 265)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background = "oklch(0.16 0.03 265)";
-                (e.currentTarget as HTMLButtonElement).style.color = "oklch(0.65 0.04 265)";
-              }}
+              onClick={() =>
+                downloadFile(
+                  workspace.prdMarkdown,
+                  `${workspace.projectSlug.replace(/[^a-zA-Z0-9_-]/g, "_")}-prd.md`,
+                  "text/markdown"
+                )
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-[oklch(0.70_0.03_265)] hover:text-white bg-[#141b24] hover:bg-[#1a2330] border border-[oklch(0.22_0.025_265)] transition-all cursor-pointer"
             >
-              ↓ Download .md
+              ↓ PRD (.md)
             </button>
           </div>
         </div>
       </div>
 
-      {/* ─── Tabs ───────────────────────────────────────── */}
-      <div className="flex gap-2 mb-6 p-1 rounded-xl w-fit"
-        style={{ background: "oklch(0.11 0.025 265)" }}>
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className="px-5 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200"
-            style={
-              activeTab === tab.id
-                ? {
-                    background: "linear-gradient(135deg, oklch(0.65 0.22 290), oklch(0.55 0.22 230))",
-                    color: "white",
-                    boxShadow: "0 0 20px oklch(0.65 0.22 290 / 0.35)",
-                  }
-                : {
-                    background: "transparent",
-                    color: "oklch(0.55 0.04 265)",
-                  }
-            }
-            onMouseEnter={(e) => {
-              if (activeTab !== tab.id) {
-                (e.currentTarget as HTMLButtonElement).style.color = "oklch(0.80 0.04 265)";
-                (e.currentTarget as HTMLButtonElement).style.background = "oklch(0.16 0.03 265)";
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (activeTab !== tab.id) {
-                (e.currentTarget as HTMLButtonElement).style.color = "oklch(0.55 0.04 265)";
-                (e.currentTarget as HTMLButtonElement).style.background = "transparent";
-              }
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
+      {/* ─── Navigation Workspace Tabs ───────────────────── */}
+      <div className="flex flex-wrap gap-2 mb-6 p-1.5 rounded-xl w-fit bg-[#0f141d] border border-[oklch(0.20_0.025_265)]">
+        {WORKSPACE_TABS.map((tab) => {
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all duration-200 cursor-pointer flex items-center gap-1.5 ${
+                isActive
+                  ? "bg-gradient-to-r from-amber-600 to-rose-600 text-white shadow-lg shadow-rose-950/40"
+                  : "text-[oklch(0.60_0.03_265)] hover:text-white hover:bg-[#151c27]"
+              }`}
+            >
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* ─── Content card ───────────────────────────────── */}
-      <div
-        key={activeTab}
-        className="glass-card rounded-2xl p-8 animate-scale-in custom-scrollbar"
-        style={{ minHeight: "500px" }}
-      >
-        {activeTab === "prd" ? (
-          /* ── Rendered Markdown ── */
-          <div className="prose-prd">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {result.prdMarkdown}
-            </ReactMarkdown>
-          </div>
-        ) : (
-          /* ── Master Prompt (monospace) ── */
-          <div>
-            {/* Copy button inside */}
-            <div className="flex justify-between items-center mb-4">
-              <span className="text-xs font-semibold text-[oklch(0.50_0.08_290)] uppercase tracking-wider">
-                Master Dev Prompt
-              </span>
-              <CopyButton text={result.masterPrompt} label="Copy Semua" />
+      {/* ─── Tab Content ─────────────────────────────────── */}
+      <div key={activeTab} className="animate-fade-in">
+        {activeTab === "wiki" && (
+          <WikiView
+            projectName={workspace.projectName}
+            projectSlug={workspace.projectSlug}
+            wiki={workspace.wiki}
+            onOpenRoadmap={() => setActiveTab("roadmap")}
+          />
+        )}
+
+        {activeTab === "roadmap" && (
+          <RoadmapView
+            projectName={workspace.projectName}
+            projectSlug={workspace.projectSlug}
+            roadmap={workspace.roadmap}
+            onBackToWiki={() => setActiveTab("wiki")}
+          />
+        )}
+
+        {activeTab === "chat" && (
+          <ChatCodebaseView
+            projectName={workspace.projectName}
+            projectSlug={workspace.projectSlug}
+            idea={workspace.idea}
+            prdMarkdown={workspace.prdMarkdown}
+          />
+        )}
+
+        {activeTab === "prd" && (
+          <div className="glass-card rounded-2xl p-8 border border-[oklch(0.22_0.03_265)] bg-[#0d1219]">
+            <div className="flex justify-between items-center mb-6 pb-4 border-b border-[oklch(0.18_0.025_265)]">
+              <div>
+                <h2 className="text-xl font-bold text-white">Dokumen PRD Lengkap</h2>
+                <p className="text-xs text-[oklch(0.50_0.04_265)] mt-1">
+                  Executive summary, fitur kunci, user stories, dan arsitektur bisnis
+                </p>
+              </div>
+              <CopyButton text={workspace.prdMarkdown} label="Salin Dokumen PRD" />
             </div>
-            <pre
-              className="whitespace-pre-wrap text-sm leading-relaxed custom-scrollbar overflow-auto"
-              style={{
-                fontFamily: "var(--font-geist-mono), 'Fira Code', monospace",
-                color: "oklch(0.82 0.05 265)",
-                maxHeight: "70vh",
-              }}
-            >
-              {result.masterPrompt}
+            <div className="prose-prd">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {workspace.prdMarkdown}
+              </ReactMarkdown>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "prompt" && (
+          <div className="glass-card rounded-2xl p-8 border border-[oklch(0.22_0.03_265)] bg-[#0d1219]">
+            <div className="flex justify-between items-center mb-6 pb-4 border-b border-[oklch(0.18_0.025_265)]">
+              <div>
+                <h2 className="text-xl font-bold text-white">Master Dev Prompt</h2>
+                <p className="text-xs text-[oklch(0.50_0.04_265)] mt-1">
+                  Prompt lengkap untuk diumpankan ke AI Coding Agent (Cursor, Claude Code, Windsurf, Copilot)
+                </p>
+              </div>
+              <CopyButton text={workspace.masterPrompt} label="Salin Master Prompt" />
+            </div>
+            <pre className="p-4 rounded-xl bg-[#080c12] border border-[oklch(0.20_0.025_265)] whitespace-pre-wrap text-xs leading-relaxed font-mono text-[oklch(0.85_0.04_170)] max-h-[70vh] overflow-auto custom-scrollbar">
+              {workspace.masterPrompt}
             </pre>
           </div>
         )}
@@ -240,24 +303,9 @@ export default function ResultPage() {
             sessionStorage.removeItem("prd_result");
             router.push("/");
           }}
-          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold transition-all duration-200"
-          style={{
-            background: "linear-gradient(135deg, oklch(0.65 0.22 290), oklch(0.55 0.22 230))",
-            color: "white",
-            boxShadow: "0 0 25px oklch(0.65 0.22 290 / 0.30)",
-          }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.boxShadow =
-              "0 0 40px oklch(0.65 0.22 290 / 0.50)";
-            (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-2px)";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.boxShadow =
-              "0 0 25px oklch(0.65 0.22 290 / 0.30)";
-            (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)";
-          }}
+          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-xs font-bold transition-all duration-200 text-white bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 shadow-lg shadow-rose-950/30 cursor-pointer"
         >
-          ✨ Generate PRD Baru
+          ✨ Generate Workspace / PRD Baru
         </button>
       </div>
     </div>
